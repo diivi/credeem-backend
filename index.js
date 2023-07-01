@@ -3,10 +3,14 @@ import dotenv from "dotenv";
 import express from "express";
 import fs from "fs";
 import os from "os";
-import {inspect} from "util";
+import { inspect } from "util";
+
+import fundUserForGasFees from './utils/fundGasFees.js';
+
 dotenv.config();
 
-const { connect, keyStores, KeyPair, Contract, utils } = nearAPI;
+
+const { connect, keyStores, KeyPair, Contract } = nearAPI;
 const app = express();
 app.use(express.json());
 
@@ -20,7 +24,7 @@ const PRIVATE_KEY = process.env.PRIVATE_KEY;
 // creates a public / private key pair using the provided private key
 const keyPair = KeyPair.fromString(PRIVATE_KEY);
 // adds the keyPair you created to keyStore
-await myKeyStore.setKey("testnet", "divy4n5h.testnet", keyPair);
+await myKeyStore.setKey("testnet", "credeem.testnet", keyPair);
 
 const connectionConfig = {
   networkId: "testnet",
@@ -33,7 +37,7 @@ const connectionConfig = {
 
 const nearConnection = await connect(connectionConfig);
 
-const mainAccountName = "divy4n5h"
+const mainAccountName = "credeem"
 const mainAccount = await nearConnection.account(`${mainAccountName}.testnet`);
 
 app.get("/ping", async (req, res) => {
@@ -45,17 +49,18 @@ app.post("/business/create", async (req, res) => {
   console.log(req.body)
   const { businessName } = req.body;
   const businessAccountName = `${businessName}.${mainAccountName}.testnet`;
-  try{
+  try {
     await mainAccount.createAccount(businessAccountName, keyPair.publicKey, "3000000000000000000000000");
     // add private key to keystore
     await myKeyStore.setKey("testnet", businessAccountName, keyPair);
   } catch (e) {
+    console.log(e);
     return res.status(400).send("Account already exists");
   }
 
   // create a token contract for the business
   const businessAccount = await nearConnection.account(businessAccountName);
-  try{
+  try {
     await businessAccount.deployContract(
       fs.readFileSync("./contracts/fungible_token.wasm"),
     );
@@ -70,7 +75,7 @@ app.post("/business/create", async (req, res) => {
       businessAccount,
       businessAccountName,
       {
-        changeMethods: ["ft_transfer", "ft_transfer_call", "new"],
+        changeMethods: ["ft_transfer", "ft_transfer_call", "new", "storage_deposit"],
         viewMethods: ["ft_balance_of", "ft_total_supply"],
       },
     );
@@ -88,9 +93,22 @@ app.post("/business/create", async (req, res) => {
     console.log(e)
     return res.status(400).send("Token creation failed");
   }
-  
+
+  try {
+    await businessTokenContract.storage_deposit(
+      {
+        account_id: mainAccount,
+      },
+      300000000000000,
+      "1250000000000000000000",
+    );
+  } catch (e) {
+    console.log(e)
+    return res.status(400).send("Main account registration failed");
+  }
+
   // store the business name and token in memory
-  return res.status(200).json({businessName, symbolName});
+  return res.status(200).json({ businessName, symbolName });
 });
 
 app.post("/user/new", async (req, res) => {
@@ -104,9 +122,9 @@ app.post("/user/new", async (req, res) => {
     return res.status(400).send("Account already exists");
   }
   return res.status(200).json({
-      user: `${user}.${mainAccountName}.testnet`,
-      created: true
-    });
+    user: `${user}.${mainAccountName}.testnet`,
+    created: true
+  });
 });
 
 // register the user on the business's token contract
@@ -132,7 +150,7 @@ app.post("/user/register", async (req, res) => {
     console.log(e)
     return res.status(400).send("User onboarding failed");
   }
-  return res.status(200).json({businessName, user});
+  return res.status(200).json({ businessName, user });
 });
 
 app.post("/user/reward", async (req, res) => {
@@ -159,7 +177,7 @@ app.post("/user/reward", async (req, res) => {
     console.log(e)
     return res.status(400).send("Token transfer failed");
   }
-  return res.status(200).json({businessName, user, amount});
+  return res.status(200).json({ businessName, user, amount });
 });
 
 app.get("/user/balance", async (req, res) => {
@@ -177,14 +195,14 @@ app.get("/user/balance", async (req, res) => {
     const balance = await businessTokenContract.ft_balance_of({
       account_id: user,
     });
-    return res.status(200).json({businessName, user, balance});
+    return res.status(200).json({ businessName, user, balance });
   } catch (e) {
     console.log(e)
     return res.status(400).send("Balance retrieval failed");
   }
 });
 
-app.post("credits/swap", async (req, res) => {
+app.post("/credits/swap", async (req, res) => {
   const { fromBusiness, toBusiness, fromBusinessAmount, toBusinessAmount, userAccount } = req.body;
   const fromBusinessAccountName = `${fromBusiness}.${mainAccountName}.testnet`;
   const toBusinessAccountName = `${toBusiness}.${mainAccountName}.testnet`;
@@ -198,6 +216,9 @@ app.post("credits/swap", async (req, res) => {
       viewMethods: ["ft_balance_of", "ft_total_supply"],
     },
   );
+
+  await fundUserForGasFees(userAccount, nearConnection);
+
   try {
     await fromBusinessTokenContract.ft_transfer(
       {
@@ -235,7 +256,7 @@ app.post("credits/swap", async (req, res) => {
     return res.status(400).send("Token transfer to user failed");
   }
 
-  return res.status(200).json({fromBusiness, toBusiness, fromBusinessAmount, toBusinessAmount, userAccount, success: true});
+  return res.status(200).json({ fromBusiness, toBusiness, fromBusinessAmount, toBusinessAmount, userAccount, success: true });
 });
 
 app.listen(3000, () => {
