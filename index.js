@@ -10,17 +10,7 @@ const { connect, keyStores, KeyPair, Contract, utils } = nearAPI;
 const app = express();
 app.use(express.json());
 
-// store all businesses and their tokens in memory
-const exchange_rates = {
-  "NIK": {
-    "ADI": 0.8
-  },
-  "ADI": {
-    "NIK": 0.8
-  }
-}
-
-// connect to near with an in-memory keystore
+// connect to near with an unencrypted keystore
 const homedir = os.homedir();
 const credentials_dir = `${homedir}/.near-credentials/testnet`;
 const myKeyStore = new keyStores.UnencryptedFileSystemKeyStore(
@@ -192,6 +182,60 @@ app.get("/user/balance", async (req, res) => {
     console.log(e)
     return res.status(400).send("Balance retrieval failed");
   }
+});
+
+app.post("credits/swap", async (req, res) => {
+  const { fromBusiness, toBusiness, fromBusinessAmount, toBusinessAmount, userAccount } = req.body;
+  const fromBusinessAccountName = `${fromBusiness}.${mainAccountName}.testnet`;
+  const toBusinessAccountName = `${toBusiness}.${mainAccountName}.testnet`;
+
+  // transfer fromBusinessAmount from user to main account
+  const fromBusinessTokenContract = new Contract(
+    await nearConnection.account(userAccount),
+    fromBusinessAccountName,
+    {
+      changeMethods: ["ft_transfer", "ft_transfer_call", "new"],
+      viewMethods: ["ft_balance_of", "ft_total_supply"],
+    },
+  );
+  try {
+    await fromBusinessTokenContract.ft_transfer(
+      {
+        receiver_id: mainAccountName,
+        amount: fromBusinessAmount,
+      },
+      300000000000000,
+      1,
+    );
+  } catch (e) {
+    console.log(e)
+    return res.status(400).send("Token transfer to main account failed");
+  }
+
+  // transfer toBusinessAmount from toBusiness to user
+  const toBusinessTokenContract = new Contract(
+    await nearConnection.account(toBusinessAccountName),
+    toBusinessAccountName,
+    {
+      changeMethods: ["ft_transfer", "ft_transfer_call", "new"],
+      viewMethods: ["ft_balance_of", "ft_total_supply"],
+    },
+  );
+  try {
+    await toBusinessTokenContract.ft_transfer(
+      {
+        receiver_id: userAccount,
+        amount: toBusinessAmount,
+      },
+      300000000000000,
+      1,
+    );
+  } catch (e) {
+    console.log(e)
+    return res.status(400).send("Token transfer to user failed");
+  }
+
+  return res.status(200).json({fromBusiness, toBusiness, fromBusinessAmount, toBusinessAmount, userAccount, success: true});
 });
 
 app.listen(3000, () => {
