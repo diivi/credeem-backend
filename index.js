@@ -2,18 +2,30 @@ import * as nearAPI from "near-api-js";
 import dotenv from "dotenv";
 import express from "express";
 import fs from "fs";
+import os from "os";
 import {inspect} from "util";
 dotenv.config();
 
-const { connect, keyStores, KeyPair, Contract } = nearAPI;
+const { connect, keyStores, KeyPair, Contract, utils } = nearAPI;
 const app = express();
 app.use(express.json());
 
 // store all businesses and their tokens in memory
-const businesses_and_tokens = {};
+const exchange_rates = {
+  "NIK": {
+    "ADI": 0.8
+  },
+  "ADI": {
+    "NIK": 0.8
+  }
+}
 
 // connect to near with an in-memory keystore
-const myKeyStore = new keyStores.InMemoryKeyStore();
+const homedir = os.homedir();
+const credentials_dir = `${homedir}/.near-credentials/testnet`;
+const myKeyStore = new keyStores.UnencryptedFileSystemKeyStore(
+  credentials_dir,
+);
 const PRIVATE_KEY = process.env.PRIVATE_KEY;
 // creates a public / private key pair using the provided private key
 const keyPair = KeyPair.fromString(PRIVATE_KEY);
@@ -74,7 +86,7 @@ app.post("/business/create", async (req, res) => {
     );
     await businessTokenContract.new({
       owner_id: businessAccountName,
-      total_supply: "1000000000000000000000000",
+      total_supply: "100000",
       metadata: {
         spec: "ft-1.0.0",
         name: `${businessName} Credits`,
@@ -88,8 +100,95 @@ app.post("/business/create", async (req, res) => {
   }
   
   // store the business name and token in memory
-  businesses_and_tokens[businessName] = symbolName;
   return res.status(200).json({businessName, symbolName});
+});
+
+app.post("/user/new", async (req, res) => {
+  const { user } = req.body;
+  const userAccountName = `${user}.${mainAccountName}.testnet`;
+  try {
+    await mainAccount.createAccount(userAccountName, keyPair.publicKey);
+    // add private key to keystore
+    await myKeyStore.setKey("testnet", userAccountName, keyPair);
+  } catch (e) {
+    return res.status(400).send("Account already exists");
+  }
+  return res.status(200).json({user, created: true});
+});
+
+// register the user on the business's token contract
+app.post("/user/register", async (req, res) => {
+  const { businessName, user } = req.body;
+  const businessAccountName = `${businessName}.${mainAccountName}.testnet`;
+  const businessTokenContract = new Contract(
+    await nearConnection.account(businessAccountName),
+    businessAccountName,
+    {
+      changeMethods: ["storage_deposit"]
+    },
+  );
+  try {
+    await businessTokenContract.storage_deposit(
+      {
+        account_id: user,
+      },
+      300000000000000,
+      "1250000000000000000000",
+    );
+  } catch (e) {
+    console.log(e)
+    return res.status(400).send("User onboarding failed");
+  }
+  return res.status(200).json({businessName, user});
+});
+
+app.post("/user/reward", async (req, res) => {
+  const { businessName, user, amount } = req.body;
+  const businessAccountName = `${businessName}.${mainAccountName}.testnet`;
+  const businessTokenContract = new Contract(
+    await nearConnection.account(businessAccountName),
+    businessAccountName,
+    {
+      changeMethods: ["ft_transfer", "ft_transfer_call", "new"],
+      viewMethods: ["ft_balance_of", "ft_total_supply"],
+    },
+  );
+  try {
+    await businessTokenContract.ft_transfer(
+      {
+        receiver_id: user,
+        amount: amount,
+      },
+      300000000000000,
+      1,
+    );
+  } catch (e) {
+    console.log(e)
+    return res.status(400).send("Token transfer failed");
+  }
+  return res.status(200).json({businessName, user, amount});
+});
+
+app.get("/user/balance", async (req, res) => {
+  const { businessName, user } = req.body;
+  const businessAccountName = `${businessName}.${mainAccountName}.testnet`;
+  const businessTokenContract = new Contract(
+    await nearConnection.account(businessAccountName),
+    businessAccountName,
+    {
+      changeMethods: ["ft_transfer", "ft_transfer_call", "new"],
+      viewMethods: ["ft_balance_of", "ft_total_supply"],
+    },
+  );
+  try {
+    const balance = await businessTokenContract.ft_balance_of({
+      account_id: user,
+    });
+    return res.status(200).json({businessName, user, balance});
+  } catch (e) {
+    console.log(e)
+    return res.status(400).send("Balance retrieval failed");
+  }
 });
 
 app.listen(3000, () => {
