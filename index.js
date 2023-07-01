@@ -113,7 +113,10 @@ app.post("/user/new", async (req, res) => {
   } catch (e) {
     return res.status(400).send("Account already exists");
   }
-  return res.status(200).json({user, created: true});
+  return res.status(200).json({
+      user: `${user}.${mainAccountName}.testnet`,
+      created: true
+    });
 });
 
 // register the user on the business's token contract
