@@ -41,7 +41,7 @@ const mainAccountName = "credeem"
 const mainAccount = await nearConnection.account(`${mainAccountName}.testnet`);
 
 app.get("/ping", async (req, res) => {
-  res.send("pong");
+  res.status(200).send("pong");
 });
 
 app.post("/business/create", async (req, res) => {
@@ -70,15 +70,15 @@ app.post("/business/create", async (req, res) => {
 
   // create a token for the business
   const symbolName = businessName.substring(0, 3).toUpperCase();
+  const businessTokenContract = new Contract(
+    businessAccount,
+    businessAccountName,
+    {
+      changeMethods: ["ft_transfer", "ft_transfer_call", "new", "storage_deposit"],
+      viewMethods: ["ft_balance_of", "ft_total_supply"],
+    },
+  );
   try {
-    const businessTokenContract = new Contract(
-      businessAccount,
-      businessAccountName,
-      {
-        changeMethods: ["ft_transfer", "ft_transfer_call", "new", "storage_deposit"],
-        viewMethods: ["ft_balance_of", "ft_total_supply"],
-      },
-    );
     await businessTokenContract.new({
       owner_id: businessAccountName,
       total_supply: "100000",
@@ -97,7 +97,7 @@ app.post("/business/create", async (req, res) => {
   try {
     await businessTokenContract.storage_deposit(
       {
-        account_id: mainAccount,
+        account_id: "credeem.testnet",
       },
       300000000000000,
       "1250000000000000000000",
@@ -222,7 +222,7 @@ app.post("/credits/swap", async (req, res) => {
   try {
     await fromBusinessTokenContract.ft_transfer(
       {
-        receiver_id: mainAccountName,
+        receiver_id: `${mainAccountName}.testnet`,
         amount: fromBusinessAmount,
       },
       300000000000000,
